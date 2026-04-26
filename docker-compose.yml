@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: docker-manager-backend
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - PORT=8080
+    restart: unless-stopped
+    networks:
+      - docker-manager-network
+
+  frontend:
+    build: ./frontend
+    container_name: docker-manager-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - docker-manager-network
+
+networks:
+  docker-manager-network:
+    driver: bridge

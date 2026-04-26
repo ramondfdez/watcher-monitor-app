@@ -1,0 +1,354 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/gorilla/mux"
+)
+
+func main() {
+	router := mux.NewRouter()
+
+	// CORS middleware
+	router.Use(corsMiddleware)
+
+	// Routes
+	router.HandleFunc("/api/containers", listContainers).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/containers/{id}/restart", restartContainer).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/containers/{id}/start", startContainer).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/containers/{id}/stop", stopContainer).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/containers/{id}/logs", getContainerLogs).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/stats", getSystemStats).Methods("GET", "OPTIONS")
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Server starting on port %s...", port)
+	log.Fatal(http.ListenAndServe(":"+port, router))
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func listContainers(w http.ResponseWriter, r *http.Request) {
+	cmd := exec.Command("docker", "ps", "-a", "--format", "{{json .}}")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var containerInfos []map[string]interface{}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var container map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &container); err != nil {
+			continue
+		}
+		
+		// Transformar al formato esperado por el frontend
+		normalized := map[string]interface{}{
+			"id":      container["ID"],
+			"name":    container["Names"],
+			"image":   container["Image"],
+			"state":   container["State"],
+			"status":  container["Status"],
+			"created": container["CreatedAt"],
+		}
+		
+		containerInfos = append(containerInfos, normalized)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(containerInfos)
+}
+
+func restartContainer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	containerID := vars["id"]
+
+	cmd := exec.Command("docker", "restart", containerID)
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "restarted"})
+}
+
+func startContainer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	containerID := vars["id"]
+
+	cmd := exec.Command("docker", "start", containerID)
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+}
+
+func stopContainer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	containerID := vars["id"]
+
+	cmd := exec.Command("docker", "stop", containerID)
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+}
+
+func getContainerLogs(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	containerID := vars["id"]
+
+	cmd := exec.Command("docker", "logs", "--tail", "100", "--timestamps", containerID)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(out.Bytes())
+}
+
+func getSystemStats(w http.ResponseWriter, r *http.Request) {
+	stats := make(map[string]interface{})
+
+	// Hostname
+	hostnameCmd := exec.Command("hostname")
+	var hostnameOut bytes.Buffer
+	hostnameCmd.Stdout = &hostnameOut
+	if err := hostnameCmd.Run(); err == nil {
+		stats["hostname"] = strings.TrimSpace(hostnameOut.String())
+	} else {
+		stats["hostname"] = "unknown"
+	}
+
+	// Uptime (from /proc/uptime)
+	uptimeCmd := exec.Command("sh", "-c", "cat /proc/uptime | cut -d' ' -f1 | awk '{days=int($1/86400); hours=int(($1%86400)/3600); if(days>0) printf \"%dd %dh\", days, hours; else printf \"%dh\", hours}'")
+	var uptimeOut bytes.Buffer
+	uptimeCmd.Stdout = &uptimeOut
+	if err := uptimeCmd.Run(); err == nil {
+		uptime := strings.TrimSpace(uptimeOut.String())
+		if uptime != "" {
+			stats["uptime"] = uptime
+		} else {
+			stats["uptime"] = "N/A"
+		}
+	} else {
+		stats["uptime"] = "N/A"
+	}
+
+	// Load Average
+	loadCmd := exec.Command("sh", "-c", "cat /proc/loadavg | cut -d' ' -f1")
+	var loadOut bytes.Buffer
+	loadCmd.Stdout = &loadOut
+	if err := loadCmd.Run(); err == nil {
+		stats["load_average"] = strings.TrimSpace(loadOut.String())
+	} else {
+		stats["load_average"] = "0.0"
+	}
+
+	// CPU usage (approximation from load average as percentage)
+	cpuCmd := exec.Command("sh", "-c", "cat /proc/loadavg | cut -d' ' -f1 | awk '{printf \"%.1f\", $1 * 25}'")
+	var cpuOut bytes.Buffer
+	cpuCmd.Stdout = &cpuOut
+	if err := cpuCmd.Run(); err == nil {
+		cpuUsage := strings.TrimSpace(cpuOut.String())
+		if cpuUsage != "" {
+			stats["cpu_usage"] = cpuUsage
+		} else {
+			stats["cpu_usage"] = "0"
+		}
+	} else {
+		stats["cpu_usage"] = "0"
+	}
+
+	// Memory usage (from /proc/meminfo)
+	memCmd := exec.Command("sh", "-c", "grep -E 'MemTotal|MemAvailable' /proc/meminfo | awk '{print $2}' | awk '{total+=$1} NR==2{used=total-$1; printf \"%.0f\", used/1024}'")
+	var memOut bytes.Buffer
+	memCmd.Stdout = &memOut
+	if err := memCmd.Run(); err == nil {
+		memUsed := strings.TrimSpace(memOut.String())
+		if memUsed != "" {
+			stats["memory_used_mb"] = memUsed
+		} else {
+			stats["memory_used_mb"] = "0"
+		}
+	} else {
+		stats["memory_used_mb"] = "0"
+	}
+
+	// Total memory (from /proc/meminfo)
+	totalMemCmd := exec.Command("sh", "-c", "grep MemTotal /proc/meminfo | awk '{printf \"%.0f\", $2/1024}'")
+	var totalMemOut bytes.Buffer
+	totalMemCmd.Stdout = &totalMemOut
+	if err := totalMemCmd.Run(); err == nil {
+		totalMem := strings.TrimSpace(totalMemOut.String())
+		if totalMem != "" {
+			stats["memory_total_mb"] = totalMem
+		} else {
+			stats["memory_total_mb"] = "8192"
+		}
+	} else {
+		stats["memory_total_mb"] = "8192"
+	}
+
+	// Disk usage
+	diskCmd := exec.Command("sh", "-c", "df -h / | tail -1 | awk '{print $5}' | sed 's/%//'")
+	var diskOut bytes.Buffer
+	diskCmd.Stdout = &diskOut
+	if err := diskCmd.Run(); err == nil {
+		stats["disk_usage"] = strings.TrimSpace(diskOut.String())
+	} else {
+		stats["disk_usage"] = "0"
+	}
+
+	// Disk space (used/total)
+	diskSpaceCmd := exec.Command("sh", "-c", "df -h / | tail -1 | awk '{print $3\"/\"$2}'")
+	var diskSpaceOut bytes.Buffer
+	diskSpaceCmd.Stdout = &diskSpaceOut
+	if err := diskSpaceCmd.Run(); err == nil {
+		stats["disk_space"] = strings.TrimSpace(diskSpaceOut.String())
+	} else {
+		stats["disk_space"] = "0/0"
+	}
+
+	// Local IP
+	ipCmd := exec.Command("sh", "-c", "hostname -i 2>/dev/null || ip route get 1 | awk '{print $7}' | head -1")
+	var ipOut bytes.Buffer
+	ipCmd.Stdout = &ipOut
+	if err := ipCmd.Run(); err == nil {
+		ip := strings.TrimSpace(ipOut.String())
+		if ip != "" {
+			stats["local_ip"] = strings.Split(ip, " ")[0]
+		} else {
+			stats["local_ip"] = "127.0.0.1"
+		}
+	} else {
+		stats["local_ip"] = "127.0.0.1"
+	}
+
+	// Network interface
+	netCmd := exec.Command("sh", "-c", "ip route | grep default | awk '{print $5}' | head -1")
+	var netOut bytes.Buffer
+	netCmd.Stdout = &netOut
+	if err := netCmd.Run(); err == nil {
+		iface := strings.TrimSpace(netOut.String())
+		if iface != "" {
+			stats["network_interface"] = iface
+		} else {
+			stats["network_interface"] = "eth0"
+		}
+	} else {
+		stats["network_interface"] = "eth0"
+	}
+
+	// Temperature (if available - works on Raspberry Pi/Orange Pi)
+	tempCmd := exec.Command("sh", "-c", "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{printf \"%.1f\", $1/1000}'")
+	var tempOut bytes.Buffer
+	tempCmd.Stdout = &tempOut
+	if err := tempCmd.Run(); err == nil {
+		temp := strings.TrimSpace(tempOut.String())
+		if temp != "" {
+			stats["temperature"] = temp
+		} else {
+			stats["temperature"] = "N/A"
+		}
+	} else {
+		stats["temperature"] = "N/A"
+	}
+
+	// Docker containers stats
+	dockerCmd := exec.Command("docker", "ps", "-q")
+	var dockerOut bytes.Buffer
+	dockerCmd.Stdout = &dockerOut
+	if err := dockerCmd.Run(); err == nil {
+		containerIDs := strings.Split(strings.TrimSpace(dockerOut.String()), "\n")
+		runningCount := 0
+		for _, id := range containerIDs {
+			if id != "" {
+				runningCount++
+			}
+		}
+		stats["containers_running"] = runningCount
+	} else {
+		stats["containers_running"] = 0
+	}
+
+	// Total containers
+	dockerAllCmd := exec.Command("docker", "ps", "-a", "-q")
+	var dockerAllOut bytes.Buffer
+	dockerAllCmd.Stdout = &dockerAllOut
+	if err := dockerAllCmd.Run(); err == nil {
+		allContainerIDs := strings.Split(strings.TrimSpace(dockerAllOut.String()), "\n")
+		totalCount := 0
+		for _, id := range allContainerIDs {
+			if id != "" {
+				totalCount++
+			}
+		}
+		stats["containers_total"] = totalCount
+	} else {
+		stats["containers_total"] = 0
+	}
+
+	// Docker images count
+	imagesCmd := exec.Command("docker", "images", "-q")
+	var imagesOut bytes.Buffer
+	imagesCmd.Stdout = &imagesOut
+	if err := imagesCmd.Run(); err == nil {
+		imageIDs := strings.Split(strings.TrimSpace(imagesOut.String()), "\n")
+		imageCount := 0
+		for _, id := range imageIDs {
+			if id != "" {
+				imageCount++
+			}
+		}
+		stats["images_count"] = imageCount
+	} else {
+		stats["images_count"] = 0
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}

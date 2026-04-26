@@ -1,0 +1,10 @@
+*.log
+.env
+.DS_Store
+backend/main
+backend/docker-manager
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

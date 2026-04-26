@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Manager - Orange Pi</title>
+    <link rel="stylesheet" href="styles.css?v=3">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <span class="logo-icon">🍊</span>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard')" title="Dashboard">
+                    <span class="nav-icon">📊</span>
+                </button>
+                <button class="nav-item" data-tab="containers" onclick="switchTab('containers')" title="Contenedores">
+                    <span class="nav-icon">📦</span>
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <div>
+                        <h1 id="page-title">Dashboard del Sistema</h1>
+                        <p class="subtitle" id="page-subtitle">Monitoreo en tiempo real</p>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <button id="refreshBtn" class="btn btn-refresh">
+                        <span class="btn-icon">↻</span>
+                        <span>Actualizar</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard Tab -->
+            <div id="dashboard-tab" class="tab-content active">
+                <!-- System Info Header -->
+                <div class="system-info-banner">
+                    <div class="system-info-item">
+                        <span class="info-icon">💻</span>
+                        <div class="info-content">
+                            <span class="info-label">Hostname</span>
+                            <span class="info-value" id="hostname">-</span>
+                        </div>
+                    </div>
+                    <div class="system-info-item">
+                        <span class="info-icon">⏱️</span>
+                        <div class="info-content">
+                            <span class="info-label">Uptime</span>
+                            <span class="info-value" id="uptime">-</span>
+                        </div>
+                    </div>
+                    <div class="system-info-item">
+                        <span class="info-icon">🌐</span>
+                        <div class="info-content">
+                            <span class="info-label">IP Local</span>
+                            <span class="info-value" id="local-ip">-</span>
+                        </div>
+                    </div>
+                    <div class="system-info-item">
+                        <span class="info-icon">🌡️</span>
+                        <div class="info-content">
+                            <span class="info-label">Temperatura</span>
+                            <span class="info-value" id="temperature">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon cpu">💻</div>
+                        <div class="stat-details">
+                            <div class="stat-label">Uso de CPU</div>
+                            <div class="stat-value" id="cpu-value">0%</div>
+                            <div class="stat-change" id="cpu-load">Load: 0.00</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon memory">🧠</div>
+                        <div class="stat-details">
+                            <div class="stat-label">Memoria RAM</div>
+                            <div class="stat-value" id="memory-value">0 MB</div>
+                            <div class="stat-change" id="memory-total">de 0 MB</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon disk">💾</div>
+                        <div class="stat-details">
+                            <div class="stat-label">Disco</div>
+                            <div class="stat-value" id="disk-value">0%</div>
+                            <div class="stat-change" id="disk-space">0 usado</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon network">📡</div>
+                        <div class="stat-details">
+                            <div class="stat-label">Red</div>
+                            <div class="stat-value" id="network-interface">-</div>
+                            <div class="stat-change">Interfaz activa</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon containers">📦</div>
+                        <div class="stat-details">
+                            <div class="stat-label">Contenedores</div>
+                            <div class="stat-value" id="containers-running">0</div>
+                            <div class="stat-change" id="containers-total">de 0 total</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon images">💿</div>
+                        <div class="stat-details">
+                            <div class="stat-label">Imágenes</div>
+                            <div class="stat-value" id="images-count">0</div>
+                            <div class="stat-change">Disponibles</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts -->
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>Uso de CPU</h3>
+                            <span class="chart-badge">Tiempo real</span>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="cpuChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>Uso de Memoria</h3>
+                            <span class="chart-badge">Tiempo real</span>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="memoryChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Containers Tab -->
+            <div id="containers-tab" class="tab-content">
+                <div id="loading" class="loading-state">
+                    <div class="spinner"></div>
+                    <p>Cargando contenedores...</p>
+                </div>
+                <div id="error" class="error-state" style="display: none;"></div>
+                <div id="containersList" class="containers-grid"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal para logs -->
+    <div id="logsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="logsTitle">Logs del Contenedor</h2>
+                <button class="close-btn" onclick="closeLogsModal()">&times;</button>
+            </div>
+            <pre id="logsContent" class="logs-content">Cargando logs...</pre>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
