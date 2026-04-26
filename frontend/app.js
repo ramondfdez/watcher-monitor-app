@@ -257,10 +257,33 @@ function renderContainers() {
         return;
     }
 
-    containersList.innerHTML = containers.map(container => `
-        <div class="container-card ${container.state ? container.state.toLowerCase() : 'unknown'}">
+    // Separar contenedores propios de la app vs otros
+    const appContainerNames = ['docker-manager-backend', 'docker-manager-frontend'];
+    const otherContainers = [];
+    const appContainers = [];
+    
+    containers.forEach(container => {
+        const containerName = (container.name || '').replace(/^\//, ''); // Remover / inicial si existe
+        if (appContainerNames.includes(containerName)) {
+            appContainers.push(container);
+        } else {
+            otherContainers.push(container);
+        }
+    });
+    
+    // Renderizar primero otros contenedores, luego los de la app
+    const allContainersHTML = [...otherContainers, ...appContainers].map(container => {
+        const containerName = (container.name || '').replace(/^\//, '');
+        const isAppContainer = appContainerNames.includes(containerName);
+        const cardClass = isAppContainer ? 'container-card-app' : '';
+        
+        return `
+        <div class="container-card ${container.state ? container.state.toLowerCase() : 'unknown'} ${cardClass}">
             <div class="container-header">
-                <div class="container-name">${container.name || 'Sin nombre'}</div>
+                <div class="container-name">
+                    ${container.name || 'Sin nombre'}
+                    ${isAppContainer ? '<span class="app-badge">Sistema</span>' : ''}
+                </div>
                 <span class="status-badge">${container.state || 'unknown'}</span>
             </div>
             
@@ -280,24 +303,37 @@ function renderContainers() {
             </div>
 
             <div class="container-actions">
-                ${container.state === 'running' ? `
-                    <button class="btn btn-warning btn-sm" onclick="stopContainer('${container.id}', '${container.name}')">
-                        ⏸ Detener
+                ${!isAppContainer ? `
+                    ${container.state === 'running' ? `
+                        <button class="btn btn-warning btn-sm" onclick="stopContainer('${container.id}', '${container.name}')">
+                            ⏸ Detener
+                        </button>
+                    ` : `
+                        <button class="btn btn-success btn-sm" onclick="startContainer('${container.id}', '${container.name}')">
+                            ▶ Iniciar
+                        </button>
+                    `}
+                    <button class="btn btn-primary btn-sm" onclick="restartContainer('${container.id}', '${container.name}')">
+                        ↻ Reiniciar
+                    </button>
+                    <button class="btn btn-logs btn-sm" onclick="showLogs('${container.id}', '${container.name}')">
+                        📋 Logs
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteContainer('${container.id}', '${container.name}')">
+                        🗑️ Eliminar
                     </button>
                 ` : `
-                    <button class="btn btn-success btn-sm" onclick="startContainer('${container.id}', '${container.name}')">
-                        ▶ Iniciar
+                    <button class="btn btn-logs btn-sm" onclick="showLogs('${container.id}', '${container.name}')">
+                        📋 Logs
                     </button>
+                    <div class="info-text">ℹ️ Contenedor del sistema (solo informativo)</div>
                 `}
-                <button class="btn btn-primary btn-sm" onclick="restartContainer('${container.id}', '${container.name}')">
-                    ↻ Reiniciar
-                </button>
-                <button class="btn btn-logs btn-sm" onclick="showLogs('${container.id}', '${container.name}')">
-                    📋 Logs
-                </button>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
+    
+    containersList.innerHTML = allContainersHTML;
 }
 
 // Reiniciar contenedor
@@ -359,6 +395,29 @@ async function stopContainer(id, name) {
 
         showNotification(`✓ Contenedor "${name}" detenido`, 'success');
         setTimeout(loadContainers, 2000);
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification(`✗ Error: ${error.message}`, 'error');
+    }
+}
+
+// Eliminar contenedor
+async function deleteContainer(id, name) {
+    if (!confirm(`⚠️ ¿ELIMINAR PERMANENTEMENTE el contenedor "${name}"?\n\nEsta acción no se puede deshacer.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/containers/${id}/delete`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            throw new Error('Error al eliminar el contenedor');
+        }
+
+        showNotification(`✓ Contenedor "${name}" eliminado`, 'success');
+        setTimeout(loadContainers, 1000);
     } catch (error) {
         console.error('Error:', error);
         showNotification(`✗ Error: ${error.message}`, 'error');

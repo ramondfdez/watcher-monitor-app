@@ -32,6 +32,7 @@ func main() {
 	router.HandleFunc("/api/containers/{id}/restart", restartContainer).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/containers/{id}/start", startContainer).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/containers/{id}/stop", stopContainer).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/containers/{id}/delete", deleteContainer).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/containers/{id}/logs", getContainerLogs).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/stats", getSystemStats).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/processes", getProcesses).Methods("GET", "OPTIONS")
@@ -141,6 +142,21 @@ func stopContainer(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+}
+
+func deleteContainer(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	containerID := vars["id"]
+
+	// Force remove container
+	cmd := exec.Command("docker", "rm", "-f", containerID)
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
 
 func getContainerLogs(w http.ResponseWriter, r *http.Request) {

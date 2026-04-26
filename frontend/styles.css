@@ -434,6 +434,37 @@ body {
     border-left-color: #94a3b8;
 }
 
+.container-card-app {
+    opacity: 0.75;
+    border-left-color: #6b7280 !important;
+}
+
+.container-card-app .container-header {
+    background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%) !important;
+}
+
+.container-card-app:hover {
+    transform: none;
+}
+
+.app-badge {
+    background: rgba(255, 255, 255, 0.3);
+    padding: 0.2rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    margin-left: 0.5rem;
+    font-weight: 700;
+}
+
+.info-text {
+    flex: 1 1 100%;
+    text-align: center;
+    font-size: 0.75rem;
+    color: #64748b;
+    font-style: italic;
+    padding: 0.25rem;
+}
+
 .container-header {
     padding: 0.875rem 1.25rem;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -458,6 +489,10 @@ body {
 .container-name::before {
     content: "📦";
     font-size: 1.25rem;
+}
+
+.container-card-app .container-name::before {
+    content: "🔒";
 }
 
 .status-badge {
