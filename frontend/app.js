@@ -15,23 +15,16 @@ document.addEventListener('DOMContentLoaded', () => {
     initCharts();
     switchTab('dashboard');
     
-    // Botón de actualizar
-    document.getElementById('refreshBtn').addEventListener('click', () => {
-        if (currentTab === 'dashboard') {
-            loadSystemStats();
-        } else {
-            loadContainers();
-        }
-    });
-
-    // Auto-refresh
+    // Auto-refresh cada 5 segundos
     setInterval(() => {
         if (currentTab === 'dashboard') {
             loadSystemStats();
-        } else {
+        } else if (currentTab === 'containers') {
             loadContainers();
+        } else if (currentTab === 'processes') {
+            loadProcesses();
         }
-    }, 5000); // Cada 5 segundos
+    }, 5000);
 });
 
 // Cambiar de pestaña
@@ -52,11 +45,13 @@ function switchTab(tabName) {
     // Actualizar título
     const titles = {
         'dashboard': 'Dashboard del Sistema',
-        'containers': 'Gestión de Contenedores'
+        'containers': 'Gestión de Contenedores',
+        'processes': 'Procesos y Sistema'
     };
     const subtitles = {
         'dashboard': 'Monitoreo en tiempo real',
-        'containers': 'Control y administración'
+        'containers': 'Control y administración',
+        'processes': 'Gestión de procesos y acciones del sistema'
     };
     
     document.getElementById('page-title').textContent = titles[tabName];
@@ -65,8 +60,11 @@ function switchTab(tabName) {
     // Cargar datos
     if (tabName === 'dashboard') {
         loadSystemStats();
-    } else {
+    } else if (tabName === 'containers') {
         loadContainers();
+    } else if (tabName === 'processes') {
+        loadProcesses();
+        setupSystemActions();
     }
 }
 
@@ -188,6 +186,11 @@ function updateDashboard(stats) {
     
     // Red
     document.getElementById('network-interface').textContent = stats.network_interface || '-';
+    
+    // Velocidad de red
+    const downloadSpeed = parseFloat(stats.download_speed) || 0;
+    const uploadSpeed = parseFloat(stats.upload_speed) || 0;
+    document.getElementById('network-speed').textContent = `↓ ${downloadSpeed.toFixed(1)} Mbps ↑ ${uploadSpeed.toFixed(1)} Mbps`;
     
     // Contenedores
     const containersRunning = stats.containers_running || 0;
@@ -397,9 +400,149 @@ window.onclick = function(event) {
     if (event.target === modal) {
         closeLogsModal();
     }
+    const confirmModal = document.getElementById('confirmModal');
+    if (event.target === confirmModal) {
+        closeConfirmModal();
+    }
 }
 
 // Mostrar notificación (simplificada - puedes mejorarla con toast notifications)
 function showNotification(message, type) {
     alert(message);
+}
+
+// ============ PROCESOS ============
+
+// Cargar procesos
+async function loadProcesses() {
+    try {
+        const response = await fetch(`${API_URL}/processes`);
+        
+        if (!response.ok) {
+            throw new Error(`Error HTTP: ${response.status}`);
+        }
+        
+        const processes = await response.json();
+        renderProcesses(processes);
+    } catch (error) {
+        console.error('Error al cargar procesos:', error);
+        const processesList = document.getElementById('processesList');
+        processesList.innerHTML = `
+            <tr>
+                <td colspan="5" class="error-row">Error al cargar procesos: ${error.message}</td>
+            </tr>
+        `;
+    }
+}
+
+// Renderizar procesos
+function renderProcesses(processes) {
+    const processesList = document.getElementById('processesList');
+    const processesCount = document.getElementById('processes-count');
+    
+    if (!processes || processes.length === 0) {
+        processesList.innerHTML = `
+            <tr>
+                <td colspan="5" class="empty-row">No hay procesos para mostrar</td>
+            </tr>
+        `;
+        processesCount.textContent = '0 procesos';
+        return;
+    }
+    
+    processesCount.textContent = `${processes.length} procesos`;
+    
+    processesList.innerHTML = processes.map(proc => `
+        <tr>
+            <td><span class="pid-badge">${proc.pid}</span></td>
+            <td>${proc.user}</td>
+            <td><span class="cpu-usage ${proc.cpu > 50 ? 'high' : ''}">${proc.cpu}%</span></td>
+            <td><span class="mem-usage ${proc.mem > 50 ? 'high' : ''}">${proc.mem}%</span></td>
+            <td class="cmd-cell">${proc.command}</td>
+        </tr>
+    `).join('');
+}
+
+// ============ ACCIONES DEL SISTEMA ============
+
+let currentAction = null;
+
+// Configurar acciones del sistema
+function setupSystemActions() {
+    const rebootBtn = document.getElementById('rebootBtn');
+    const updateBtn = document.getElementById('updateBtn');
+    
+    if (rebootBtn && !rebootBtn.hasAttribute('data-listener')) {
+        rebootBtn.setAttribute('data-listener', 'true');
+        rebootBtn.addEventListener('click', () => {
+            showConfirmModal(
+                'Reiniciar Sistema',
+                '¿Estás seguro de que quieres reiniciar la Orange Pi? Todos los servicios se detendrán temporalmente.',
+                'reboot'
+            );
+        });
+    }
+    
+    if (updateBtn && !updateBtn.hasAttribute('data-listener')) {
+        updateBtn.setAttribute('data-listener', 'true');
+        updateBtn.addEventListener('click', () => {
+            showConfirmModal(
+                'Actualizar Sistema',
+                '¿Deseas actualizar el sistema? Se ejecutará "apt update && apt upgrade -y". Esto puede tardar varios minutos.',
+                'update'
+            );
+        });
+    }
+}
+
+// Mostrar modal de confirmación
+function showConfirmModal(title, message, action) {
+    currentAction = action;
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmMessage').textContent = message;
+    document.getElementById('confirmModal').classList.add('active');
+    
+    const confirmBtn = document.getElementById('confirmActionBtn');
+    confirmBtn.onclick = () => executeSystemAction(action);
+}
+
+// Cerrar modal de confirmación
+function closeConfirmModal() {
+    document.getElementById('confirmModal').classList.remove('active');
+    currentAction = null;
+}
+
+// Ejecutar acción del sistema
+async function executeSystemAction(action) {
+    closeConfirmModal();
+    
+    const actionBtn = action === 'reboot' ? document.getElementById('rebootBtn') : document.getElementById('updateBtn');
+    const originalHTML = actionBtn.innerHTML;
+    
+    actionBtn.disabled = true;
+    actionBtn.innerHTML = '<span class="spinner-sm"></span> Procesando...';
+    
+    try {
+        const response = await fetch(`${API_URL}/system/${action}`, {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Error HTTP: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (action === 'reboot') {
+            showNotification('Sistema reiniciándose... La conexión se perderá momentáneamente.', 'info');
+        } else {
+            showNotification(result.message || 'Actualización iniciada correctamente', 'success');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification(`Error al ejecutar la acción: ${error.message}`, 'error');
+    } finally {
+        actionBtn.disabled = false;
+        actionBtn.innerHTML = originalHTML;
+    }
 }

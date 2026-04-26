@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +26,9 @@ func main() {
 	router.HandleFunc("/api/containers/{id}/stop", stopContainer).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/containers/{id}/logs", getContainerLogs).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/stats", getSystemStats).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/processes", getProcesses).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/system/reboot", rebootSystem).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/system/update", updateSystem).Methods("POST", "OPTIONS")
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -283,6 +287,53 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["network_interface"] = "eth0"
 	}
 
+	// Network speed (download/upload in Mbps)
+	downloadCmd := exec.Command("sh", "-c", "cat /sys/class/net/$(ip route | grep default | awk '{print $5}' | head -1)/statistics/rx_bytes")
+	var downloadOut bytes.Buffer
+	downloadCmd.Stdout = &downloadOut
+	var prevRxBytes int64 = 0
+	if err := downloadCmd.Run(); err == nil {
+		rxBytes := strings.TrimSpace(downloadOut.String())
+		if rxBytes != "" {
+			var rxValue int64
+			if _, err := fmt.Sscanf(rxBytes, "%d", &rxValue); err == nil {
+				if prevRxBytes > 0 {
+					diff := rxValue - prevRxBytes
+					mbps := float64(diff*8) / (5 * 1000000) // 5 seconds interval, convert to Mbps
+					stats["download_speed"] = fmt.Sprintf("%.1f", mbps)
+				} else {
+					stats["download_speed"] = "0.0"
+				}
+				prevRxBytes = rxValue
+			}
+		}
+	} else {
+		stats["download_speed"] = "0.0"
+	}
+
+	uploadCmd := exec.Command("sh", "-c", "cat /sys/class/net/$(ip route | grep default | awk '{print $5}' | head -1)/statistics/tx_bytes")
+	var uploadOut bytes.Buffer
+	uploadCmd.Stdout = &uploadOut
+	var prevTxBytes int64 = 0
+	if err := uploadCmd.Run(); err == nil {
+		txBytes := strings.TrimSpace(uploadOut.String())
+		if txBytes != "" {
+			var txValue int64
+			if _, err := fmt.Sscanf(txBytes, "%d", &txValue); err == nil {
+				if prevTxBytes > 0 {
+					diff := txValue - prevTxBytes
+					mbps := float64(diff*8) / (5 * 1000000) // 5 seconds interval, convert to Mbps
+					stats["upload_speed"] = fmt.Sprintf("%.1f", mbps)
+				} else {
+					stats["upload_speed"] = "0.0"
+				}
+				prevTxBytes = txValue
+			}
+		}
+	} else {
+		stats["upload_speed"] = "0.0"
+	}
+
 	// Temperature (if available - works on Raspberry Pi/Orange Pi)
 	tempCmd := exec.Command("sh", "-c", "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{printf \"%.1f\", $1/1000}'")
 	var tempOut bytes.Buffer
@@ -351,4 +402,71 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+func getProcesses(w http.ResponseWriter, r *http.Request) {
+	// Get top processes by CPU usage
+	cmd := exec.Command("sh", "-c", "ps aux --sort=-%cpu | head -n 21 | tail -n 20 | awk '{printf \"{\\\"pid\\\":\\\"%s\\\",\\\"user\\\":\\\"%s\\\",\\\"cpu\\\":\\\"%s\\\",\\\"mem\\\":\\\"%s\\\",\\\"command\\\":\\\"%s\\\"}\\n\", $2, $1, $3, $4, substr($0, index($0,$11))}'")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	if err := cmd.Run(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	var processes []map[string]interface{}
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var proc map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &proc); err != nil {
+			continue
+		}
+		processes = append(processes, proc)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(processes)
+}
+
+func rebootSystem(w http.ResponseWriter, r *http.Request) {
+	// Schedule system reboot with 10 second delay to allow response
+	go func() {
+		// Wait 2 seconds to ensure response is sent
+		exec.Command("sleep", "2").Run()
+		exec.Command("sudo", "reboot").Run()
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "El sistema se reiniciará en unos segundos",
+	})
+}
+
+func updateSystem(w http.ResponseWriter, r *http.Request) {
+	// Run system update in background
+	go func() {
+		log.Println("Starting system update...")
+		cmd := exec.Command("sudo", "sh", "-c", "apt-get update && apt-get upgrade -y")
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		
+		if err := cmd.Run(); err != nil {
+			log.Printf("Update error: %s\nOutput: %s", err.Error(), out.String())
+		} else {
+			log.Println("System update completed successfully")
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Actualización del sistema iniciada. Revisa los logs del servidor para más detalles.",
+	})
 }

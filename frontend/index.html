@@ -12,7 +12,7 @@
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <span class="logo-icon">🍊</span>
+                <span class="logo-icon">🐳</span>
             </div>
             
             <nav class="sidebar-nav">
@@ -22,23 +22,18 @@
                 <button class="nav-item" data-tab="containers" onclick="switchTab('containers')" title="Contenedores">
                     <span class="nav-icon">📦</span>
                 </button>
+                <button class="nav-item" data-tab="processes" onclick="switchTab('processes')" title="Procesos">
+                    <span class="nav-icon">⚙️</span>
+                </button>
             </nav>
         </aside>
 
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-header">
-                <div class="header-left">
-                    <div>
-                        <h1 id="page-title">Dashboard del Sistema</h1>
-                        <p class="subtitle" id="page-subtitle">Monitoreo en tiempo real</p>
-                    </div>
-                </div>
-                <div class="header-right">
-                    <button id="refreshBtn" class="btn btn-refresh">
-                        <span class="btn-icon">↻</span>
-                        <span>Actualizar</span>
-                    </button>
+                <div class="header-content">
+                    <h1 id="page-title">Dashboard del Sistema</h1>
+                    <p class="subtitle" id="page-subtitle">Monitoreo en tiempo real</p>
                 </div>
             </header>
 
@@ -110,7 +105,7 @@
                         <div class="stat-details">
                             <div class="stat-label">Red</div>
                             <div class="stat-value" id="network-interface">-</div>
-                            <div class="stat-change">Interfaz activa</div>
+                            <div class="stat-change" id="network-speed">↓ 0 Mbps ↑ 0 Mbps</div>
                         </div>
                     </div>
 
@@ -166,7 +161,79 @@
                 <div id="error" class="error-state" style="display: none;"></div>
                 <div id="containersList" class="containers-grid"></div>
             </div>
+
+            <!-- Processes Tab -->
+            <div id="processes-tab" class="tab-content">
+                <!-- System Actions -->
+                <div class="system-actions-card">
+                    <h3>🔧 Acciones del Sistema</h3>
+                    <div class="actions-grid">
+                        <button id="rebootBtn" class="action-btn action-reboot">
+                            <span class="action-icon">🔄</span>
+                            <div class="action-details">
+                                <div class="action-title">Reiniciar Sistema</div>
+                                <div class="action-desc">Reiniciar la Orange Pi</div>
+                            </div>
+                        </button>
+                        <button id="updateBtn" class="action-btn action-update">
+                            <span class="action-icon">⬆️</span>
+                            <div class="action-details">
+                                <div class="action-title">Actualizar Sistema</div>
+                                <div class="action-desc">apt update && apt upgrade</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Processes List -->
+                <div class="processes-card">
+                    <div class="processes-header">
+                        <h3>🔍 Procesos del Sistema</h3>
+                        <div class="processes-stats">
+                            <span id="processes-count">Cargando...</span>
+                        </div>
+                    </div>
+                    <div class="processes-table-wrapper">
+                        <table class="processes-table">
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>Usuario</th>
+                                    <th>CPU %</th>
+                                    <th>MEM %</th>
+                                    <th>Comando</th>
+                                </tr>
+                            </thead>
+                            <tbody id="processesList">
+                                <tr>
+                                    <td colspan="5" class="loading-row">
+                                        <div class="spinner-sm"></div>
+                                        Cargando procesos...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </main>
+    </div>
+
+    <!-- Modal de confirmación -->
+    <div id="confirmModal" class="modal">
+        <div class="modal-content modal-confirm">
+            <div class="modal-header">
+                <h2 id="confirmTitle">Confirmar Acción</h2>
+                <button class="close-btn" onclick="closeConfirmModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage">¿Estás seguro de realizar esta acción?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeConfirmModal()">Cancelar</button>
+                <button class="btn btn-danger" id="confirmActionBtn">Confirmar</button>
+            </div>
+        </div>
     </div>
 
     <!-- Modal para logs -->
