@@ -13,6 +13,12 @@ services:
     restart: unless-stopped
     networks:
       - docker-manager-network
+    # Privilegios necesarios para reiniciar el sistema y gestionar procesos
+    cap_add:
+      - SYS_BOOT      # Permite reiniciar el sistema
+      - SYS_ADMIN     # Permite operaciones administrativas
+    # Alternativa (menos segura pero más simple):
+    # privileged: true
 
   frontend:
     build: ./frontend

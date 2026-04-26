@@ -173,11 +173,12 @@ function updateDashboard(stats) {
     
     // Memoria
     const memoryUsed = parseFloat(stats.memory_used_mb) || 0;
-    const memoryTotal = parseFloat(stats.memory_total_mb) || 8192;
+    const memoryTotal = parseFloat(stats.memory_total_mb) || 1024;
+    const memoryAvailable = parseFloat(stats.memory_available_mb) || 0;
     const memoryPercent = (memoryUsed / memoryTotal) * 100;
     
     document.getElementById('memory-value').textContent = memoryUsed.toFixed(0) + ' MB';
-    document.getElementById('memory-total').textContent = `de ${memoryTotal.toFixed(0)} MB (${memoryPercent.toFixed(1)}%)`;
+    document.getElementById('memory-total').textContent = `de ${memoryTotal.toFixed(0)} MB (${memoryPercent.toFixed(1)}%) · ${memoryAvailable.toFixed(0)} MB libre`;
     
     // Disco
     const diskUsage = parseFloat(stats.disk_usage) || 0;
@@ -190,7 +191,7 @@ function updateDashboard(stats) {
     // Velocidad de red
     const downloadSpeed = parseFloat(stats.download_speed) || 0;
     const uploadSpeed = parseFloat(stats.upload_speed) || 0;
-    document.getElementById('network-speed').textContent = `↓ ${downloadSpeed.toFixed(1)} Mbps ↑ ${uploadSpeed.toFixed(1)} Mbps`;
+    document.getElementById('network-speed').textContent = `↓ ${downloadSpeed.toFixed(2)} Mbps ↑ ${uploadSpeed.toFixed(2)} Mbps`;
     
     // Contenedores
     const containersRunning = stats.containers_running || 0;

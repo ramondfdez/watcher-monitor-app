@@ -9,8 +9,16 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
+)
+
+// Variables globales para calcular velocidad de red
+var (
+	prevRxBytes    int64
+	prevTxBytes    int64
+	lastUpdateTime time.Time
 )
 
 func main() {
@@ -207,8 +215,24 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["cpu_usage"] = "0"
 	}
 
-	// Memory usage (from /proc/meminfo)
-	memCmd := exec.Command("sh", "-c", "grep -E 'MemTotal|MemAvailable' /proc/meminfo | awk '{print $2}' | awk '{total+=$1} NR==2{used=total-$1; printf \"%.0f\", used/1024}'")
+	// Memory usage (using free command for accurate values)
+	// Get total memory
+	totalMemCmd := exec.Command("sh", "-c", "free -m | grep Mem | awk '{print $2}'")
+	var totalMemOut bytes.Buffer
+	totalMemCmd.Stdout = &totalMemOut
+	if err := totalMemCmd.Run(); err == nil {
+		totalMem := strings.TrimSpace(totalMemOut.String())
+		if totalMem != "" {
+			stats["memory_total_mb"] = totalMem
+		} else {
+			stats["memory_total_mb"] = "1024"
+		}
+	} else {
+		stats["memory_total_mb"] = "1024"
+	}
+
+	// Get used memory (excluding buffers/cache)
+	memCmd := exec.Command("sh", "-c", "free -m | grep Mem | awk '{print $3}'")
 	var memOut bytes.Buffer
 	memCmd.Stdout = &memOut
 	if err := memCmd.Run(); err == nil {
@@ -222,19 +246,19 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["memory_used_mb"] = "0"
 	}
 
-	// Total memory (from /proc/meminfo)
-	totalMemCmd := exec.Command("sh", "-c", "grep MemTotal /proc/meminfo | awk '{printf \"%.0f\", $2/1024}'")
-	var totalMemOut bytes.Buffer
-	totalMemCmd.Stdout = &totalMemOut
-	if err := totalMemCmd.Run(); err == nil {
-		totalMem := strings.TrimSpace(totalMemOut.String())
-		if totalMem != "" {
-			stats["memory_total_mb"] = totalMem
+	// Get available memory
+	memAvailCmd := exec.Command("sh", "-c", "free -m | grep Mem | awk '{print $7}'")
+	var memAvailOut bytes.Buffer
+	memAvailCmd.Stdout = &memAvailOut
+	if err := memAvailCmd.Run(); err == nil {
+		memAvail := strings.TrimSpace(memAvailOut.String())
+		if memAvail != "" {
+			stats["memory_available_mb"] = memAvail
 		} else {
-			stats["memory_total_mb"] = "8192"
+			stats["memory_available_mb"] = "0"
 		}
 	} else {
-		stats["memory_total_mb"] = "8192"
+		stats["memory_available_mb"] = "0"
 	}
 
 	// Disk usage
@@ -288,10 +312,29 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Network speed (download/upload in Mbps)
-	downloadCmd := exec.Command("sh", "-c", "cat /sys/class/net/$(ip route | grep default | awk '{print $5}' | head -1)/statistics/rx_bytes")
+	// Get network interface
+	ifaceCmd := exec.Command("sh", "-c", "ip route | grep default | awk '{print $5}' | head -1")
+	var ifaceOut bytes.Buffer
+	ifaceCmd.Stdout = &ifaceOut
+	iface := "eth0"
+	if err := ifaceCmd.Run(); err == nil {
+		if i := strings.TrimSpace(ifaceOut.String()); i != "" {
+			iface = i
+		}
+	}
+
+	// Calculate time difference
+	now := time.Now()
+	timeDiff := now.Sub(lastUpdateTime).Seconds()
+	if timeDiff == 0 || lastUpdateTime.IsZero() {
+		timeDiff = 5.0 // Default to 5 seconds
+	}
+	lastUpdateTime = now
+
+	// Download speed (RX)
+	downloadCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /sys/class/net/%s/statistics/rx_bytes 2>/dev/null || echo 0", iface))
 	var downloadOut bytes.Buffer
 	downloadCmd.Stdout = &downloadOut
-	var prevRxBytes int64 = 0
 	if err := downloadCmd.Run(); err == nil {
 		rxBytes := strings.TrimSpace(downloadOut.String())
 		if rxBytes != "" {
@@ -299,22 +342,30 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 			if _, err := fmt.Sscanf(rxBytes, "%d", &rxValue); err == nil {
 				if prevRxBytes > 0 {
 					diff := rxValue - prevRxBytes
-					mbps := float64(diff*8) / (5 * 1000000) // 5 seconds interval, convert to Mbps
-					stats["download_speed"] = fmt.Sprintf("%.1f", mbps)
+					// Convert bytes to Mbps: bytes * 8 bits/byte / time_seconds / 1000000 bits/Mbps
+					mbps := float64(diff*8) / timeDiff / 1000000
+					if mbps < 0 {
+						mbps = 0 // Handle counter reset
+					}
+					stats["download_speed"] = fmt.Sprintf("%.2f", mbps)
 				} else {
-					stats["download_speed"] = "0.0"
+					stats["download_speed"] = "0.00"
 				}
 				prevRxBytes = rxValue
+			} else {
+				stats["download_speed"] = "0.00"
 			}
+		} else {
+			stats["download_speed"] = "0.00"
 		}
 	} else {
-		stats["download_speed"] = "0.0"
+		stats["download_speed"] = "0.00"
 	}
 
-	uploadCmd := exec.Command("sh", "-c", "cat /sys/class/net/$(ip route | grep default | awk '{print $5}' | head -1)/statistics/tx_bytes")
+	// Upload speed (TX)
+	uploadCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /sys/class/net/%s/statistics/tx_bytes 2>/dev/null || echo 0", iface))
 	var uploadOut bytes.Buffer
 	uploadCmd.Stdout = &uploadOut
-	var prevTxBytes int64 = 0
 	if err := uploadCmd.Run(); err == nil {
 		txBytes := strings.TrimSpace(uploadOut.String())
 		if txBytes != "" {
@@ -322,16 +373,23 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 			if _, err := fmt.Sscanf(txBytes, "%d", &txValue); err == nil {
 				if prevTxBytes > 0 {
 					diff := txValue - prevTxBytes
-					mbps := float64(diff*8) / (5 * 1000000) // 5 seconds interval, convert to Mbps
-					stats["upload_speed"] = fmt.Sprintf("%.1f", mbps)
+					mbps := float64(diff*8) / timeDiff / 1000000
+					if mbps < 0 {
+						mbps = 0 // Handle counter reset
+					}
+					stats["upload_speed"] = fmt.Sprintf("%.2f", mbps)
 				} else {
-					stats["upload_speed"] = "0.0"
+					stats["upload_speed"] = "0.00"
 				}
 				prevTxBytes = txValue
+			} else {
+				stats["upload_speed"] = "0.00"
 			}
+		} else {
+			stats["upload_speed"] = "0.00"
 		}
 	} else {
-		stats["upload_speed"] = "0.0"
+		stats["upload_speed"] = "0.00"
 	}
 
 	// Temperature (if available - works on Raspberry Pi/Orange Pi)
@@ -434,11 +492,26 @@ func getProcesses(w http.ResponseWriter, r *http.Request) {
 }
 
 func rebootSystem(w http.ResponseWriter, r *http.Request) {
-	// Schedule system reboot with 10 second delay to allow response
+	// Schedule system reboot with delay to allow response
 	go func() {
 		// Wait 2 seconds to ensure response is sent
-		exec.Command("sleep", "2").Run()
-		exec.Command("sudo", "reboot").Run()
+		time.Sleep(2 * time.Second)
+		
+		// Try multiple reboot methods
+		// Method 1: Direct reboot (works if container has CAP_SYS_BOOT)
+		if err := exec.Command("reboot").Run(); err != nil {
+			log.Printf("Direct reboot failed: %v, trying with sudo...", err)
+			
+			// Method 2: With sudo
+			if err := exec.Command("sudo", "reboot").Run(); err != nil {
+				log.Printf("Sudo reboot failed: %v, trying /sbin/reboot...", err)
+				
+				// Method 3: Direct path
+				if err := exec.Command("/sbin/reboot").Run(); err != nil {
+					log.Printf("All reboot methods failed: %v", err)
+				}
+			}
+		}
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
