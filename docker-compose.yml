@@ -8,15 +8,17 @@ services:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /sbin/reboot:/sbin/reboot:ro
-      - /sbin/shutdown:/sbin/shutdown:ro
       - metrics-history:/tmp  # Persistir histórico de métricas
+      # Montar filesystem del host para métricas reales
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/hostname:/host/etc/hostname:ro
     environment:
       - PORT=8080
     restart: unless-stopped
     networks:
       - docker-manager-network
-    # Opción 1: Modo privilegiado (más simple pero menos seguro)
+    # Modo privilegiado necesario para reiniciar el sistema host
     privileged: true
 
   frontend:

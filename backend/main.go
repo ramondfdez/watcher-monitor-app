@@ -338,8 +338,8 @@ func getContainerLogs(w http.ResponseWriter, r *http.Request) {
 func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	stats := make(map[string]interface{})
 
-	// Hostname
-	hostnameCmd := exec.Command("hostname")
+	// Hostname (from host system)
+	hostnameCmd := exec.Command("sh", "-c", "cat /host/etc/hostname 2>/dev/null || hostname")
 	var hostnameOut bytes.Buffer
 	hostnameCmd.Stdout = &hostnameOut
 	if err := hostnameCmd.Run(); err == nil {
@@ -348,8 +348,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["hostname"] = "unknown"
 	}
 
-	// Uptime (from /proc/uptime)
-	uptimeCmd := exec.Command("sh", "-c", "cat /proc/uptime | cut -d' ' -f1 | awk '{days=int($1/86400); hours=int(($1%86400)/3600); if(days>0) printf \"%dd %dh\", days, hours; else printf \"%dh\", hours}'")
+	// Uptime (from host /proc/uptime)
+	uptimeCmd := exec.Command("sh", "-c", "cat /host/proc/uptime | cut -d' ' -f1 | awk '{days=int($1/86400); hours=int(($1%86400)/3600); if(days>0) printf \"%dd %dh\", days, hours; else printf \"%dh\", hours}'")
 	var uptimeOut bytes.Buffer
 	uptimeCmd.Stdout = &uptimeOut
 	if err := uptimeCmd.Run(); err == nil {
@@ -363,8 +363,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["uptime"] = "N/A"
 	}
 
-	// Load Average
-	loadCmd := exec.Command("sh", "-c", "cat /proc/loadavg | cut -d' ' -f1")
+	// Load Average (from host)
+	loadCmd := exec.Command("sh", "-c", "cat /host/proc/loadavg | cut -d' ' -f1")
 	var loadOut bytes.Buffer
 	loadCmd.Stdout = &loadOut
 	if err := loadCmd.Run(); err == nil {
@@ -374,7 +374,7 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// CPU usage (approximation from load average as percentage)
-	cpuCmd := exec.Command("sh", "-c", "cat /proc/loadavg | cut -d' ' -f1 | awk '{printf \"%.1f\", $1 * 25}'")
+	cpuCmd := exec.Command("sh", "-c", "cat /host/proc/loadavg | cut -d' ' -f1 | awk '{printf \"%.1f\", $1 * 25}'")
 	var cpuOut bytes.Buffer
 	cpuCmd.Stdout = &cpuOut
 	if err := cpuCmd.Run(); err == nil {
@@ -388,13 +388,12 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["cpu_usage"] = "0"
 	}
 
-	// Memory usage (using free command for accurate values)
-	// Get total memory
-	totalMemCmd := exec.Command("sh", "-c", "free -m | grep Mem | awk '{print $2}'")
-	var totalMemOut bytes.Buffer
-	totalMemCmd.Stdout = &totalMemOut
-	if err := totalMemCmd.Run(); err == nil {
-		totalMem := strings.TrimSpace(totalMemOut.String())
+	// Memory usage (from host using /proc/meminfo for more accuracy)
+	memTotalCmd := exec.Command("sh", "-c", "grep MemTotal /host/proc/meminfo | awk '{print int($2/1024)}'")
+	var memTotalOut bytes.Buffer
+	memTotalCmd.Stdout = &memTotalOut
+	if err := memTotalCmd.Run(); err == nil {
+		totalMem := strings.TrimSpace(memTotalOut.String())
 		if totalMem != "" {
 			stats["memory_total_mb"] = totalMem
 		} else {
@@ -404,23 +403,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["memory_total_mb"] = "1024"
 	}
 
-	// Get used memory (excluding buffers/cache)
-	memCmd := exec.Command("sh", "-c", "free -m | grep Mem | awk '{print $3}'")
-	var memOut bytes.Buffer
-	memCmd.Stdout = &memOut
-	if err := memCmd.Run(); err == nil {
-		memUsed := strings.TrimSpace(memOut.String())
-		if memUsed != "" {
-			stats["memory_used_mb"] = memUsed
-		} else {
-			stats["memory_used_mb"] = "0"
-		}
-	} else {
-		stats["memory_used_mb"] = "0"
-	}
-
-	// Get available memory
-	memAvailCmd := exec.Command("sh", "-c", "free -m | grep Mem | awk '{print $7}'")
+	// Get available memory from host
+	memAvailCmd := exec.Command("sh", "-c", "grep MemAvailable /host/proc/meminfo | awk '{print int($2/1024)}'")
 	var memAvailOut bytes.Buffer
 	memAvailCmd.Stdout = &memAvailOut
 	if err := memAvailCmd.Run(); err == nil {
@@ -433,6 +417,15 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	} else {
 		stats["memory_available_mb"] = "0"
 	}
+
+	// Calculate used memory (total - available)
+	totalMem, _ := strconv.Atoi(stats["memory_total_mb"].(string))
+	availMem, _ := strconv.Atoi(stats["memory_available_mb"].(string))
+	usedMem := totalMem - availMem
+	if usedMem < 0 {
+		usedMem = 0
+	}
+	stats["memory_used_mb"] = strconv.Itoa(usedMem)
 
 	// Disk usage
 	diskCmd := exec.Command("sh", "-c", "df -h / | tail -1 | awk '{print $5}' | sed 's/%//'")
@@ -469,8 +462,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["local_ip"] = "127.0.0.1"
 	}
 
-	// Network interface
-	netCmd := exec.Command("sh", "-c", "ip route | grep default | awk '{print $5}' | head -1")
+	// Network interface (from host)
+	netCmd := exec.Command("sh", "-c", "cat /host/proc/net/route | awk 'NR==2 {print $1}'")
 	var netOut bytes.Buffer
 	netCmd.Stdout = &netOut
 	if err := netCmd.Run(); err == nil {
@@ -485,8 +478,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Network speed (download/upload in Mbps)
-	// Get network interface
-	ifaceCmd := exec.Command("sh", "-c", "ip route | grep default | awk '{print $5}' | head -1")
+	// Get network interface from host
+	ifaceCmd := exec.Command("sh", "-c", "cat /host/proc/net/route | awk 'NR==2 {print $1}'")
 	var ifaceOut bytes.Buffer
 	ifaceCmd.Stdout = &ifaceOut
 	iface := "eth0"
@@ -504,8 +497,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	}
 	lastUpdateTime = now
 
-	// Download speed (RX)
-	downloadCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /sys/class/net/%s/statistics/rx_bytes 2>/dev/null || echo 0", iface))
+	// Download speed (RX) - read from host /sys
+	downloadCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /host/sys/class/net/%s/statistics/rx_bytes 2>/dev/null || echo 0", iface))
 	var downloadOut bytes.Buffer
 	downloadCmd.Stdout = &downloadOut
 	if err := downloadCmd.Run(); err == nil {
@@ -535,8 +528,8 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["download_speed"] = "0.00"
 	}
 
-	// Upload speed (TX)
-	uploadCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /sys/class/net/%s/statistics/tx_bytes 2>/dev/null || echo 0", iface))
+	// Upload speed (TX) - read from host /sys
+	uploadCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /host/sys/class/net/%s/statistics/tx_bytes 2>/dev/null || echo 0", iface))
 	var uploadOut bytes.Buffer
 	uploadCmd.Stdout = &uploadOut
 	if err := uploadCmd.Run(); err == nil {
@@ -565,13 +558,20 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["upload_speed"] = "0.00"
 	}
 
-	// Temperature (if available - works on Raspberry Pi/Orange Pi)
-	tempCmd := exec.Command("sh", "-c", "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{printf \"%.1f\", $1/1000}'")
+	// Temperature (from host - works on Raspberry Pi/Orange Pi)
+	// Try multiple thermal zones
+	tempCmd := exec.Command("sh", "-c", `
+		for zone in /host/sys/class/thermal/thermal_zone*/temp; do
+			if [ -r "$zone" ]; then
+				cat "$zone" | awk '{printf "%.1f", $1/1000}' 2>/dev/null && break
+			fi
+		done
+	`)
 	var tempOut bytes.Buffer
 	tempCmd.Stdout = &tempOut
 	if err := tempCmd.Run(); err == nil {
 		temp := strings.TrimSpace(tempOut.String())
-		if temp != "" {
+		if temp != "" && temp != "0.0" {
 			stats["temperature"] = temp
 		} else {
 			stats["temperature"] = "N/A"
@@ -697,20 +697,14 @@ func rebootSystem(w http.ResponseWriter, r *http.Request) {
 		// Wait 2 seconds to ensure response is sent
 		time.Sleep(2 * time.Second)
 		
-		// Try multiple reboot methods
-		// Method 1: Direct reboot (works if container has CAP_SYS_BOOT)
-		if err := exec.Command("reboot").Run(); err != nil {
-			log.Printf("Direct reboot failed: %v, trying with sudo...", err)
-			
-			// Method 2: With sudo
-			if err := exec.Command("sudo", "reboot").Run(); err != nil {
-				log.Printf("Sudo reboot failed: %v, trying /sbin/reboot...", err)
-				
-				// Method 3: Direct path
-				if err := exec.Command("/sbin/reboot").Run(); err != nil {
-					log.Printf("All reboot methods failed: %v", err)
-				}
-			}
+		// Reboot using busybox command (available in Alpine)
+		// Requires privileged: true in docker-compose.yml
+		cmd := exec.Command("reboot")
+		if err := cmd.Run(); err != nil {
+			log.Printf("Reboot failed: %v", err)
+			log.Printf("Note: Reboot requires privileged mode and Linux host (won't work on macOS)")
+		} else {
+			log.Printf("Reboot command executed successfully")
 		}
 	}()
 
