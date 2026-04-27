@@ -566,6 +566,13 @@ body {
     border-radius: 4px;
 }
 
+.resource-usage {
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--primary);
+}
+
 .container-actions {
     padding: 0.875rem 1.25rem;
     background: var(--light);

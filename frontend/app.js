@@ -362,6 +362,16 @@ function renderContainers() {
                     <strong>Estado:</strong>
                     <span>${container.status || 'N/A'}</span>
                 </div>
+                ${container.state === 'running' ? `
+                <div>
+                    <strong>CPU:</strong>
+                    <span class="resource-usage">${container.cpu_percent || '0%'}</span>
+                </div>
+                <div>
+                    <strong>RAM:</strong>
+                    <span class="resource-usage">${container.mem_usage || '0 B'} (${container.mem_percent || '0%'})</span>
+                </div>
+                ` : ''}
             </div>
 
             <div class="container-actions">

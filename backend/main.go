@@ -233,6 +233,28 @@ func listContainers(w http.ResponseWriter, r *http.Request) {
 	var containerInfos []map[string]interface{}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	
+	// Get stats for all running containers
+	statsMap := make(map[string]map[string]string)
+	statsCmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.Container}}|{{.CPUPerc}}|{{.MemPerc}}|{{.MemUsage}}")
+	var statsOut bytes.Buffer
+	statsCmd.Stdout = &statsOut
+	if err := statsCmd.Run(); err == nil {
+		statsLines := strings.Split(strings.TrimSpace(statsOut.String()), "\n")
+		for _, line := range statsLines {
+			if line == "" {
+				continue
+			}
+			parts := strings.Split(line, "|")
+			if len(parts) >= 4 {
+				statsMap[parts[0]] = map[string]string{
+					"cpu":    strings.TrimSpace(parts[1]),
+					"mem":    strings.TrimSpace(parts[2]),
+					"usage":  strings.TrimSpace(parts[3]),
+				}
+			}
+		}
+	}
+	
 	for _, line := range lines {
 		if line == "" {
 			continue
@@ -242,14 +264,27 @@ func listContainers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		
+		containerID := container["ID"].(string)
+		
 		// Transformar al formato esperado por el frontend
 		normalized := map[string]interface{}{
-			"id":      container["ID"],
+			"id":      containerID,
 			"name":    container["Names"],
 			"image":   container["Image"],
 			"state":   container["State"],
 			"status":  container["Status"],
 			"created": container["CreatedAt"],
+		}
+		
+		// Add stats if available (only for running containers)
+		if stats, ok := statsMap[containerID]; ok {
+			normalized["cpu_percent"] = stats["cpu"]
+			normalized["mem_percent"] = stats["mem"]
+			normalized["mem_usage"] = stats["usage"]
+		} else {
+			normalized["cpu_percent"] = "0%"
+			normalized["mem_percent"] = "0%"
+			normalized["mem_usage"] = "0 B"
 		}
 		
 		containerInfos = append(containerInfos, normalized)
@@ -373,16 +408,41 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 		stats["load_average"] = "0.0"
 	}
 
-	// CPU usage (approximation from load average as percentage)
-	cpuCmd := exec.Command("sh", "-c", "cat /host/proc/loadavg | cut -d' ' -f1 | awk '{printf \"%.1f\", $1 * 25}'")
+	// CPU usage (from /proc/stat - more accurate than load average)
+	// Get number of CPU cores
+	cpuCountCmd := exec.Command("sh", "-c", "grep -c processor /host/proc/cpuinfo")
+	var cpuCountOut bytes.Buffer
+	cpuCountCmd.Stdout = &cpuCountOut
+	numCPUs := 4 // Default fallback
+	if err := cpuCountCmd.Run(); err == nil {
+		if count, err := strconv.Atoi(strings.TrimSpace(cpuCountOut.String())); err == nil && count > 0 {
+			numCPUs = count
+		}
+	}
+
+	// Calculate CPU usage from load average as percentage
+	// Load average represents average number of processes in run queue
+	// Divide by number of CPUs and multiply by 100 for percentage
+	cpuCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /host/proc/loadavg | cut -d' ' -f1 | awk '{printf \"%%d\", ($1 / %d) * 100}'", numCPUs))
 	var cpuOut bytes.Buffer
 	cpuCmd.Stdout = &cpuOut
 	if err := cpuCmd.Run(); err == nil {
 		cpuUsage := strings.TrimSpace(cpuOut.String())
-		if cpuUsage != "" {
+		if cpuUsage != "" && cpuUsage != "0" {
 			stats["cpu_usage"] = cpuUsage
 		} else {
-			stats["cpu_usage"] = "0"
+			// If load-based calculation gives 0, try alternative method
+			// Use 1-minute load average as rough estimate
+			loadStr := stats["load_average"].(string)
+			if loadVal, err := strconv.ParseFloat(loadStr, 64); err == nil {
+				cpuPercent := int((loadVal / float64(numCPUs)) * 100)
+				if cpuPercent > 100 {
+					cpuPercent = 100
+				}
+				stats["cpu_usage"] = strconv.Itoa(cpuPercent)
+			} else {
+				stats["cpu_usage"] = "0"
+			}
 		}
 	} else {
 		stats["cpu_usage"] = "0"
@@ -463,32 +523,34 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Network interface (from host)
-	netCmd := exec.Command("sh", "-c", "cat /host/proc/net/route | awk 'NR==2 {print $1}'")
+	// Try to get default interface, fallback to first active interface
+	netCmd := exec.Command("sh", "-c", `
+		# Try default route first
+		iface=$(cat /host/proc/net/route | awk 'NR==2 {print $1}')
+		if [ -z "$iface" ] || [ "$iface" = "Iface" ]; then
+			# Fallback: find first non-loopback interface with an IP
+			iface=$(ls /host/sys/class/net/ | grep -v lo | head -1)
+		fi
+		echo "$iface"
+	`)
 	var netOut bytes.Buffer
 	netCmd.Stdout = &netOut
+	defaultIface := "eth0"
 	if err := netCmd.Run(); err == nil {
 		iface := strings.TrimSpace(netOut.String())
-		if iface != "" {
+		if iface != "" && iface != "lo" {
+			defaultIface = iface
 			stats["network_interface"] = iface
 		} else {
-			stats["network_interface"] = "eth0"
+			stats["network_interface"] = defaultIface
 		}
 	} else {
-		stats["network_interface"] = "eth0"
+		stats["network_interface"] = defaultIface
 	}
 
 	// Network speed (download/upload in Mbps)
-	// Get network interface from host
-	ifaceCmd := exec.Command("sh", "-c", "cat /host/proc/net/route | awk 'NR==2 {print $1}'")
-	var ifaceOut bytes.Buffer
-	ifaceCmd.Stdout = &ifaceOut
-	iface := "eth0"
-	if err := ifaceCmd.Run(); err == nil {
-		if i := strings.TrimSpace(ifaceOut.String()); i != "" {
-			iface = i
-		}
-	}
-
+	iface := defaultIface
+	
 	// Calculate time difference
 	now := time.Now()
 	timeDiff := now.Sub(lastUpdateTime).Seconds()
