@@ -8,7 +8,8 @@ let currentTab = 'dashboard';
 let cpuChart, memoryChart;
 let cpuData = [];
 let memoryData = [];
-const MAX_DATA_POINTS = 20;
+const MAX_DATA_POINTS = 2016; // 1 semana de datos (cada 5 minutos)
+let lastHistoryLength = { cpu: 0, memory: 0 }; // Para detectar cambios en el histórico
 
 // Inicialización
 document.addEventListener('DOMContentLoaded', () => {
@@ -76,6 +77,13 @@ function initCharts() {
         plugins: {
             legend: {
                 display: false
+            },
+            tooltip: {
+                callbacks: {
+                    label: function(context) {
+                        return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '%';
+                    }
+                }
             }
         },
         scales: {
@@ -89,11 +97,33 @@ function initCharts() {
                 }
             },
             x: {
-                display: false
+                type: 'time',
+                time: {
+                    unit: 'hour',
+                    displayFormats: {
+                        hour: 'HH:mm',
+                        day: 'dd/MM'
+                    },
+                    tooltipFormat: 'dd/MM/yyyy HH:mm'
+                },
+                ticks: {
+                    maxTicksLimit: 8,
+                    maxRotation: 0,
+                    autoSkip: true
+                },
+                grid: {
+                    display: true,
+                    color: 'rgba(255, 255, 255, 0.05)'
+                }
             }
         },
         animation: {
-            duration: 750
+            duration: 0 // Desactivar animación para mejor rendimiento con muchos puntos
+        },
+        interaction: {
+            mode: 'nearest',
+            axis: 'x',
+            intersect: false
         }
     };
 
@@ -108,10 +138,11 @@ function initCharts() {
                 data: [],
                 borderColor: '#667eea',
                 backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                borderWidth: 3,
+                borderWidth: 2,
                 fill: true,
                 tension: 0.4,
-                pointRadius: 0
+                pointRadius: 0,
+                pointHoverRadius: 4
             }]
         },
         options: commonOptions
@@ -128,10 +159,11 @@ function initCharts() {
                 data: [],
                 borderColor: '#f5576c',
                 backgroundColor: 'rgba(245, 87, 108, 0.1)',
-                borderWidth: 3,
+                borderWidth: 2,
                 fill: true,
                 tension: 0.4,
-                pointRadius: 0
+                pointRadius: 0,
+                pointHoverRadius: 4
             }]
         },
         options: commonOptions
@@ -204,9 +236,22 @@ function updateDashboard(stats) {
     const imagesCount = stats.images_count || 0;
     document.getElementById('images-count').textContent = imagesCount;
     
-    // Actualizar gráficas
-    updateChart(cpuChart, cpuData, cpuUsage);
-    updateChart(memoryChart, memoryData, memoryPercent);
+    // Actualizar gráficas solo si el histórico cambió (optimización)
+    if (stats.cpu_history && Array.isArray(stats.cpu_history) && stats.cpu_history.length > 0) {
+        // Solo actualizar si cambió el número de puntos
+        if (stats.cpu_history.length !== lastHistoryLength.cpu) {
+            updateChartFromHistory(cpuChart, stats.cpu_history);
+            lastHistoryLength.cpu = stats.cpu_history.length;
+        }
+    }
+    
+    if (stats.memory_history && Array.isArray(stats.memory_history) && stats.memory_history.length > 0) {
+        // Solo actualizar si cambió el número de puntos
+        if (stats.memory_history.length !== lastHistoryLength.memory) {
+            updateChartFromHistory(memoryChart, stats.memory_history);
+            lastHistoryLength.memory = stats.memory_history.length;
+        }
+    }
 }
 
 // Actualizar gráfica
@@ -219,6 +264,23 @@ function updateChart(chart, dataArray, newValue) {
     
     chart.data.labels = dataArray.map((_, i) => i);
     chart.data.datasets[0].data = dataArray;
+    chart.update('none');
+}
+
+// Actualizar gráfica desde histórico del backend (con timestamps)
+function updateChartFromHistory(chart, historyArray) {
+    if (!historyArray || historyArray.length === 0) {
+        return;
+    }
+    
+    // Los datos vienen como [{value: 45.2, timestamp: 1714233600}, ...]
+    // Convertir timestamp Unix (segundos) a milisegundos para Chart.js
+    const dataPoints = historyArray.map(point => ({
+        x: point.timestamp * 1000,  // Convertir a milisegundos
+        y: point.value              // Valor de CPU/RAM en %
+    }));
+    
+    chart.data.datasets[0].data = dataPoints;
     chart.update('none');
 }
 

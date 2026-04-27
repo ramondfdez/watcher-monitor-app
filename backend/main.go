@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -21,7 +24,98 @@ var (
 	lastUpdateTime time.Time
 )
 
+// Histórico de métricas con timestamps (1 semana de datos, muestreando cada 5 minutos)
+type MetricPoint struct {
+	Value     float64 `json:"value"`
+	Timestamp int64   `json:"timestamp"` // Unix timestamp
+}
+
+type MetricsHistory struct {
+	cpuHistory       []MetricPoint
+	memoryHistory    []MetricPoint
+	lastSaveTime     time.Time
+	mutex            sync.Mutex
+}
+
+const (
+	maxHistoryPoints = 2016  // 7 días * 24 horas * 12 (cada 5 minutos) = 2016 puntos
+	saveInterval     = 5 * time.Minute  // Guardar cada 5 minutos
+	historyFilePath  = "/tmp/metrics_history.json"  // Archivo para persistir histórico
+)
+
+var metricsHistory = &MetricsHistory{
+	cpuHistory:    make([]MetricPoint, 0, maxHistoryPoints),
+	memoryHistory: make([]MetricPoint, 0, maxHistoryPoints),
+	lastSaveTime:  time.Time{}, // Forzar guardado en primera llamada
+}
+
+// Estructura para serializar el histórico a JSON
+type HistoryData struct {
+	CPUHistory    []MetricPoint `json:"cpu_history"`
+	MemoryHistory []MetricPoint `json:"memory_history"`
+	LastSaveTime  int64         `json:"last_save_time"`
+}
+
+// Guardar histórico en archivo JSON
+func saveHistoryToFile() error {
+	metricsHistory.mutex.Lock()
+	defer metricsHistory.mutex.Unlock()
+	
+	data := HistoryData{
+		CPUHistory:    metricsHistory.cpuHistory,
+		MemoryHistory: metricsHistory.memoryHistory,
+		LastSaveTime:  metricsHistory.lastSaveTime.Unix(),
+	}
+	
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error serializing history: %v", err)
+	}
+	
+	err = ioutil.WriteFile(historyFilePath, jsonData, 0644)
+	if err != nil {
+		return fmt.Errorf("error writing history file: %v", err)
+	}
+	
+	log.Printf("History saved to %s (%d CPU points, %d memory points)", 
+		historyFilePath, len(metricsHistory.cpuHistory), len(metricsHistory.memoryHistory))
+	return nil
+}
+
+// Cargar histórico desde archivo JSON
+func loadHistoryFromFile() {
+	file, err := ioutil.ReadFile(historyFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("No history file found, starting with empty history")
+		} else {
+			log.Printf("Error reading history file: %v", err)
+		}
+		return
+	}
+	
+	var data HistoryData
+	err = json.Unmarshal(file, &data)
+	if err != nil {
+		log.Printf("Error parsing history file: %v", err)
+		return
+	}
+	
+	metricsHistory.mutex.Lock()
+	defer metricsHistory.mutex.Unlock()
+	
+	metricsHistory.cpuHistory = data.CPUHistory
+	metricsHistory.memoryHistory = data.MemoryHistory
+	metricsHistory.lastSaveTime = time.Unix(data.LastSaveTime, 0)
+	
+	log.Printf("History loaded from %s (%d CPU points, %d memory points)", 
+		historyFilePath, len(metricsHistory.cpuHistory), len(metricsHistory.memoryHistory))
+}
+
 func main() {
+	// Cargar histórico desde archivo (si existe)
+	loadHistoryFromFile()
+	
 	router := mux.NewRouter()
 
 	// CORS middleware
@@ -61,6 +155,72 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Añadir valor al histórico (circular buffer) - solo si pasó el intervalo de guardado
+func (mh *MetricsHistory) addCPU(value float64) bool {
+	mh.mutex.Lock()
+	defer mh.mutex.Unlock()
+	
+	now := time.Now()
+	// Solo guardar si pasó el intervalo o es la primera vez
+	if now.Sub(mh.lastSaveTime) < saveInterval && !mh.lastSaveTime.IsZero() {
+		return false
+	}
+	
+	mh.lastSaveTime = now
+	mh.cpuHistory = append(mh.cpuHistory, MetricPoint{
+		Value:     value,
+		Timestamp: now.Unix(),
+	})
+	
+	if len(mh.cpuHistory) > maxHistoryPoints {
+		mh.cpuHistory = mh.cpuHistory[1:]
+	}
+	
+	return true
+}
+
+func (mh *MetricsHistory) addMemory(value float64) bool {
+	mh.mutex.Lock()
+	defer mh.mutex.Unlock()
+	
+	now := time.Now()
+	// Usar el mismo timestamp que CPU para mantener sincronización
+	if now.Sub(mh.lastSaveTime) < saveInterval && !mh.lastSaveTime.IsZero() {
+		return false
+	}
+	
+	mh.memoryHistory = append(mh.memoryHistory, MetricPoint{
+		Value:     value,
+		Timestamp: now.Unix(),
+	})
+	
+	if len(mh.memoryHistory) > maxHistoryPoints {
+		mh.memoryHistory = mh.memoryHistory[1:]
+	}
+	
+	return true
+}
+
+func (mh *MetricsHistory) getCPUHistory() []MetricPoint {
+	mh.mutex.Lock()
+	defer mh.mutex.Unlock()
+	
+	// Devolver copia para evitar race conditions
+	history := make([]MetricPoint, len(mh.cpuHistory))
+	copy(history, mh.cpuHistory)
+	return history
+}
+
+func (mh *MetricsHistory) getMemoryHistory() []MetricPoint {
+	mh.mutex.Lock()
+	defer mh.mutex.Unlock()
+	
+	// Devolver copia para evitar race conditions
+	history := make([]MetricPoint, len(mh.memoryHistory))
+	copy(history, mh.memoryHistory)
+	return history
 }
 
 func listContainers(w http.ResponseWriter, r *http.Request) {
@@ -473,6 +633,32 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	} else {
 		stats["images_count"] = 0
 	}
+
+	// Guardar valores actuales en el histórico
+	cpuValue, _ := strconv.ParseFloat(stats["cpu_usage"].(string), 64)
+	cpuAdded := metricsHistory.addCPU(cpuValue)
+	
+	// Calcular porcentaje de memoria
+	memUsed, _ := strconv.ParseFloat(stats["memory_used_mb"].(string), 64)
+	memTotal, _ := strconv.ParseFloat(stats["memory_total_mb"].(string), 64)
+	memPercent := 0.0
+	if memTotal > 0 {
+		memPercent = (memUsed / memTotal) * 100
+	}
+	memAdded := metricsHistory.addMemory(memPercent)
+	
+	// Si se añadió un nuevo punto, guardar en archivo
+	if cpuAdded || memAdded {
+		go func() {
+			if err := saveHistoryToFile(); err != nil {
+				log.Printf("Error saving history: %v", err)
+			}
+		}()
+	}
+	
+	// Añadir históricos a la respuesta
+	stats["cpu_history"] = metricsHistory.getCPUHistory()
+	stats["memory_history"] = metricsHistory.getMemoryHistory()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)

@@ -8,17 +8,16 @@ services:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sbin/reboot:/sbin/reboot:ro
+      - /sbin/shutdown:/sbin/shutdown:ro
+      - metrics-history:/tmp  # Persistir histórico de métricas
     environment:
       - PORT=8080
     restart: unless-stopped
     networks:
       - docker-manager-network
-    # Privilegios necesarios para reiniciar el sistema y gestionar procesos
-    cap_add:
-      - SYS_BOOT      # Permite reiniciar el sistema
-      - SYS_ADMIN     # Permite operaciones administrativas
-    # Alternativa (menos segura pero más simple):
-    # privileged: true
+    # Opción 1: Modo privilegiado (más simple pero menos seguro)
+    privileged: true
 
   frontend:
     build: ./frontend
@@ -34,3 +33,6 @@ services:
 networks:
   docker-manager-network:
     driver: bridge
+
+volumes:
+  metrics-history:  # Volumen para persistir histórico de métricas entre reinicios
