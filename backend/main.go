@@ -157,8 +157,16 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Añadir valor al histórico (circular buffer) - solo si pasó el intervalo de guardado
-func (mh *MetricsHistory) addCPU(value float64) bool {
+// Añadir valores al histórico (CPU y memoria juntos para mantener sincronización)
+func (mh *MetricsHistory) shouldSave() bool {
+	mh.mutex.Lock()
+	defer mh.mutex.Unlock()
+	
+	now := time.Now()
+	return now.Sub(mh.lastSaveTime) >= saveInterval || mh.lastSaveTime.IsZero()
+}
+
+func (mh *MetricsHistory) addMetrics(cpuValue, memoryValue float64) bool {
 	mh.mutex.Lock()
 	defer mh.mutex.Unlock()
 	
@@ -168,34 +176,23 @@ func (mh *MetricsHistory) addCPU(value float64) bool {
 		return false
 	}
 	
+	timestamp := now.Unix()
 	mh.lastSaveTime = now
-	mh.cpuHistory = append(mh.cpuHistory, MetricPoint{
-		Value:     value,
-		Timestamp: now.Unix(),
-	})
 	
+	// Añadir CPU
+	mh.cpuHistory = append(mh.cpuHistory, MetricPoint{
+		Value:     cpuValue,
+		Timestamp: timestamp,
+	})
 	if len(mh.cpuHistory) > maxHistoryPoints {
 		mh.cpuHistory = mh.cpuHistory[1:]
 	}
 	
-	return true
-}
-
-func (mh *MetricsHistory) addMemory(value float64) bool {
-	mh.mutex.Lock()
-	defer mh.mutex.Unlock()
-	
-	now := time.Now()
-	// Usar el mismo timestamp que CPU para mantener sincronización
-	if now.Sub(mh.lastSaveTime) < saveInterval && !mh.lastSaveTime.IsZero() {
-		return false
-	}
-	
+	// Añadir memoria
 	mh.memoryHistory = append(mh.memoryHistory, MetricPoint{
-		Value:     value,
-		Timestamp: now.Unix(),
+		Value:     memoryValue,
+		Timestamp: timestamp,
 	})
-	
 	if len(mh.memoryHistory) > maxHistoryPoints {
 		mh.memoryHistory = mh.memoryHistory[1:]
 	}
@@ -636,7 +633,6 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 
 	// Guardar valores actuales en el histórico
 	cpuValue, _ := strconv.ParseFloat(stats["cpu_usage"].(string), 64)
-	cpuAdded := metricsHistory.addCPU(cpuValue)
 	
 	// Calcular porcentaje de memoria
 	memUsed, _ := strconv.ParseFloat(stats["memory_used_mb"].(string), 64)
@@ -645,10 +641,12 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	if memTotal > 0 {
 		memPercent = (memUsed / memTotal) * 100
 	}
-	memAdded := metricsHistory.addMemory(memPercent)
+	
+	// Añadir ambas métricas juntas (mantiene sincronización)
+	metricsAdded := metricsHistory.addMetrics(cpuValue, memPercent)
 	
 	// Si se añadió un nuevo punto, guardar en archivo
-	if cpuAdded || memAdded {
+	if metricsAdded {
 		go func() {
 			if err := saveHistoryToFile(); err != nil {
 				log.Printf("Error saving history: %v", err)
