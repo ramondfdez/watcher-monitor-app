@@ -423,29 +423,37 @@ func getSystemStats(w http.ResponseWriter, r *http.Request) {
 	// Calculate CPU usage from load average as percentage
 	// Load average represents average number of processes in run queue
 	// Divide by number of CPUs and multiply by 100 for percentage
-	cpuCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /host/proc/loadavg | cut -d' ' -f1 | awk '{printf \"%%d\", ($1 / %d) * 100}'", numCPUs))
+	// Use float format to avoid truncating small values
+	cpuCmd := exec.Command("sh", "-c", fmt.Sprintf("cat /host/proc/loadavg | cut -d' ' -f1 | awk '{printf \"%%.2f\", ($1 / %d) * 100}'", numCPUs))
 	var cpuOut bytes.Buffer
 	cpuCmd.Stdout = &cpuOut
 	if err := cpuCmd.Run(); err == nil {
 		cpuUsage := strings.TrimSpace(cpuOut.String())
-		if cpuUsage != "" && cpuUsage != "0" {
-			stats["cpu_usage"] = cpuUsage
-		} else {
-			// If load-based calculation gives 0, try alternative method
-			// Use 1-minute load average as rough estimate
-			loadStr := stats["load_average"].(string)
-			if loadVal, err := strconv.ParseFloat(loadStr, 64); err == nil {
-				cpuPercent := int((loadVal / float64(numCPUs)) * 100)
-				if cpuPercent > 100 {
-					cpuPercent = 100
+		if cpuUsage != "" {
+			// Validate and cap at 100%
+			if cpuVal, err := strconv.ParseFloat(cpuUsage, 64); err == nil {
+				if cpuVal > 100 {
+					cpuVal = 100
 				}
-				stats["cpu_usage"] = strconv.Itoa(cpuPercent)
+				stats["cpu_usage"] = fmt.Sprintf("%.2f", cpuVal)
 			} else {
-				stats["cpu_usage"] = "0"
+				stats["cpu_usage"] = "0.00"
 			}
+		} else {
+			stats["cpu_usage"] = "0.00"
 		}
 	} else {
-		stats["cpu_usage"] = "0"
+		// Fallback: use load average directly
+		loadStr := stats["load_average"].(string)
+		if loadVal, err := strconv.ParseFloat(loadStr, 64); err == nil {
+			cpuPercent := (loadVal / float64(numCPUs)) * 100
+			if cpuPercent > 100 {
+				cpuPercent = 100
+			}
+			stats["cpu_usage"] = fmt.Sprintf("%.2f", cpuPercent)
+		} else {
+			stats["cpu_usage"] = "0.00"
+		}
 	}
 
 	// Memory usage (from host using /proc/meminfo for more accuracy)

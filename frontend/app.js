@@ -236,21 +236,13 @@ function updateDashboard(stats) {
     const imagesCount = stats.images_count || 0;
     document.getElementById('images-count').textContent = imagesCount;
     
-    // Actualizar gráficas solo si el histórico cambió (optimización)
+    // Actualizar gráficas con el historial del backend (solo el historial, sin puntos adicionales)
     if (stats.cpu_history && Array.isArray(stats.cpu_history) && stats.cpu_history.length > 0) {
-        // Solo actualizar si cambió el número de puntos
-        if (stats.cpu_history.length !== lastHistoryLength.cpu) {
-            updateChartFromHistory(cpuChart, stats.cpu_history);
-            lastHistoryLength.cpu = stats.cpu_history.length;
-        }
+        updateChartFromHistory(cpuChart, stats.cpu_history);
     }
     
     if (stats.memory_history && Array.isArray(stats.memory_history) && stats.memory_history.length > 0) {
-        // Solo actualizar si cambió el número de puntos
-        if (stats.memory_history.length !== lastHistoryLength.memory) {
-            updateChartFromHistory(memoryChart, stats.memory_history);
-            lastHistoryLength.memory = stats.memory_history.length;
-        }
+        updateChartFromHistory(memoryChart, stats.memory_history);
     }
 }
 
